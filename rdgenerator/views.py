@@ -318,6 +318,7 @@ def generator_view(request):
             )
             try:
                 response = requests.post(url, json=data, headers=headers)
+                print(response)
                 #print(response)
                 if response.status_code == 204 or response.status_code == 200:
                     github_data = response.json()
