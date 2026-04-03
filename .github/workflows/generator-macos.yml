@@ -644,7 +644,7 @@ jobs:
             echo "Error: Invalid app bundle structure"
             exit 1
           fi
-          
+
           # Clean up
           rm certificate.p12
           security delete-keychain "$KEYCHAIN_PATH" || true
@@ -782,7 +782,7 @@ jobs:
           libjfrog_check_and_upload_file \
             "$JFROG_URL" \
             "$JFROG_REPO_PATH" \
-            "$GITHUB_WORKSPACE/${{ env.filename }}-macos-${{ matrix.job.arch }}.dmg" \
+            "$GITHUB_WORKSPACE/${{ env.filename }}-${{ matrix.job.arch }}.dmg" \
             "$JFROG_API_TOKEN"
 
   cleanup:
