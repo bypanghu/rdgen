@@ -601,14 +601,26 @@ jobs:
                 fi
               fi
               
-              echo "Signing frameworks..."
-              find "${{ env.appname }}.app/Contents/Frameworks" -type f -not -name ".*" -exec \
+              echo "Signing nested Mach-O binaries..."
+              find "${{ env.appname }}.app/Contents/Frameworks" -type f \( -perm -111 -o -name "*.dylib" \) -not -name ".*" -print0 | while IFS= read -r -d '' binary; do
+                echo "Signing binary: $binary"
                 rcodesign sign --p12-file certificate.p12 --p12-password "${{ secrets.MACOS_P12_PASSWORD }}" \
-                --code-signature-flags runtime {} \;
-              
+                  --code-signature-flags runtime "$binary"
+              done
+
+              echo "Signing framework and nested bundles from inside out..."
+              find "${{ env.appname }}.app/Contents/Frameworks" -depth \( -name "*.framework" -o -name "*.xpc" -o -name "*.appex" -o -name "*.app" \) -print0 | while IFS= read -r -d '' bundle; do
+                echo "Signing bundle: $bundle"
+                rcodesign sign --p12-file certificate.p12 --p12-password "${{ secrets.MACOS_P12_PASSWORD }}" \
+                  --code-signature-flags runtime "$bundle"
+              done
+
               echo "Signing main bundle..."
               rcodesign sign --p12-file certificate.p12 --p12-password "${{ secrets.MACOS_P12_PASSWORD }}" \
                 --code-signature-flags runtime "${{ env.appname }}.app"
+
+              echo "Verifying signed bundle..."
+              codesign --verify --deep --strict --verbose=2 "${{ env.appname }}.app"
             else
               echo "Error: Invalid app bundle structure"
               exit 1
