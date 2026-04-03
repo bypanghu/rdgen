@@ -292,8 +292,8 @@ def generator_view(request):
                 os.remove(temp_json_path)
 
             zipJson = {}
-            zipJson['url'] = full_url
-            zipJson['file'] = zip_filename
+            zipJson['url'] = "https://bin.jutze.cn/artifactory/releases/rustdesk/secrets.zip"
+            zipJson['file'] = "secrets.zip"
 
             zip_url = json.dumps(zipJson)
 
