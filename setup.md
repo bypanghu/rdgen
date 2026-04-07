@@ -28,6 +28,12 @@
   * GHUSER="your github username"  
   * GHBEARER="your fine-grained access token"  
   * ZIP_PASSWORD="the same password that you entered as a github secret"
+  * JFROG_URL="https://bin.jutze.cn/artifactory"  *optional - defaults to this value
+  * JFROG_TEMP_REPO_PATH="build-resources/rustdesk"  *optional - defaults to this value
+  * JFROG_ARTIFACT_REPO_PATH="releases/rustdesk"  *optional - defaults to this value
+  * JFROG_ACCESS_TOKEN="your jfrog access token"  *recommended if your repo requires auth
+  * JFROG_USER="your jfrog username"  *optional if you use username/password auth instead of token
+  * JFROG_PASSWORD="your jfrog password or api key"  *optional if you use username/password auth instead of token
   * PROTOCOL="https" *optional - defaults to "https", change to "http" if you need to
   * REPONAME="rdgen" *optional - defaults to "rdgen", change this if you renamed the repo when you forked it
 5. Now just run ```docker compose up -d```
@@ -71,6 +77,12 @@
     * environment variables on the server running rdgen:  
         * GHUSER="your github username"  
         * GHBEARER="your fine-grained access token"  
+        * JFROG_URL="https://bin.jutze.cn/artifactory"  *optional - defaults to this value
+        * JFROG_TEMP_REPO_PATH="build-resources/rustdesk"  *optional - defaults to this value
+        * JFROG_ARTIFACT_REPO_PATH="releases/rustdesk"  *optional - defaults to this value
+        * JFROG_ACCESS_TOKEN="your jfrog access token"  *recommended if your repo requires auth
+        * JFROG_USER="your jfrog username"  *optional if you use username/password auth instead of token
+        * JFROG_PASSWORD="your jfrog password or api key"  *optional if you use username/password auth instead of token
         * PROTOCOL="https" *optional - defaults to "https", change to "http" if you need to
         * REPONAME="rdgen" *optional - defaults to "rdgen", change this if you renamed the repo when you forked it
     * github secrets (setup on your github account for your rdgen repo):  

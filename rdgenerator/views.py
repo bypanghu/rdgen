@@ -1,6 +1,7 @@
 import io
+import mimetypes
 from pathlib import Path
-from django.http import HttpResponse, JsonResponse
+from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import render
 from django.core.files.base import ContentFile
 import os
@@ -17,6 +18,140 @@ from .forms import GenerateForm
 from .models import GithubRun
 from PIL import Image
 from urllib.parse import quote
+
+
+def _build_jfrog_url(*segments):
+    base_url = _settings.JFROG_URL.rstrip('/')
+    cleaned_segments = [quote(str(segment).strip('/'), safe='') for segment in segments if segment]
+    return f"{base_url}/{'/'.join(cleaned_segments)}"
+
+
+def _jfrog_repo_segments():
+    return [segment for segment in _settings.JFROG_TEMP_REPO_PATH.strip('/').split('/') if segment]
+
+
+def _jfrog_artifact_repo_segments():
+    return [segment for segment in _settings.JFROG_ARTIFACT_REPO_PATH.strip('/').split('/') if segment]
+
+
+def _jfrog_temp_resource_url(uuid_value, filename):
+    return _build_jfrog_url(*_jfrog_repo_segments(), uuid_value, filename)
+
+
+def _jfrog_artifact_resource_url(uuid_value, filename):
+    return _build_jfrog_url(*_jfrog_artifact_repo_segments(), uuid_value, filename)
+
+
+def _jfrog_request_kwargs(extra_headers=None, timeout=30):
+    headers = {}
+    if extra_headers:
+        headers.update(extra_headers)
+
+    access_token = _settings.JFROG_ACCESS_TOKEN
+    if access_token:
+        headers['Authorization'] = f'Bearer {access_token}'
+
+    request_kwargs = {
+        'headers': headers,
+        'timeout': timeout,
+    }
+
+    if not access_token and _settings.JFROG_USER and _settings.JFROG_PASSWORD:
+        request_kwargs['auth'] = (_settings.JFROG_USER, _settings.JFROG_PASSWORD)
+
+    return request_kwargs
+
+
+def _upload_jfrog_bytes(uuid_value, filename, content, content_type=None):
+    headers = {}
+    if content_type:
+        headers['Content-Type'] = content_type
+
+    response = requests.put(
+        _jfrog_temp_resource_url(uuid_value, filename),
+        data=content,
+        **_jfrog_request_kwargs(headers, timeout=60),
+    )
+    response.raise_for_status()
+
+
+def _upload_jfrog_artifact_bytes(uuid_value, filename, content, content_type=None):
+    headers = {}
+    if content_type:
+        headers['Content-Type'] = content_type
+
+    response = requests.put(
+        _jfrog_artifact_resource_url(uuid_value, filename),
+        data=content,
+        **_jfrog_request_kwargs(headers, timeout=60),
+    )
+    response.raise_for_status()
+
+
+def _download_jfrog_file(uuid_value, filename):
+    response = requests.get(
+        _jfrog_temp_resource_url(uuid_value, filename),
+        **_jfrog_request_kwargs(timeout=60),
+    )
+    if response.status_code == 404:
+        raise Http404("File not found")
+    response.raise_for_status()
+    return response.content, response.headers.get('Content-Type')
+
+
+def _download_jfrog_artifact_file(uuid_value, filename):
+    response = requests.get(
+        _jfrog_artifact_resource_url(uuid_value, filename),
+        **_jfrog_request_kwargs(timeout=60),
+    )
+    if response.status_code == 404:
+        raise Http404("File not found")
+    response.raise_for_status()
+    return response.content, response.headers.get('Content-Type')
+
+
+def _delete_jfrog_temp_resources(uuid_value):
+    folder_url = _build_jfrog_url(*_jfrog_repo_segments(), uuid_value)
+    response = requests.delete(folder_url, **_jfrog_request_kwargs(timeout=60))
+    if response.status_code in (200, 202, 204, 404):
+        return
+
+    filenames = ('icon.png', 'logo.png', 'privacy.png', 'secrets.zip')
+    delete_errors = []
+    for filename in filenames:
+        file_response = requests.delete(
+            _jfrog_temp_resource_url(uuid_value, filename),
+            **_jfrog_request_kwargs(timeout=60),
+        )
+        if file_response.status_code not in (200, 202, 204, 404):
+            delete_errors.append(f"{filename}: {file_response.status_code}")
+
+    if delete_errors:
+        raise requests.HTTPError('; '.join(delete_errors))
+
+
+def _build_download_response(content, filename, content_type=None):
+    response = HttpResponse(
+        content,
+        content_type=content_type or mimetypes.guess_type(filename)[0] or 'application/octet-stream',
+    )
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    return response
+
+
+def _artifact_candidate_filenames(filename):
+    candidates = [filename]
+    if filename.endswith('.dmg'):
+        if '-macos-' in filename:
+            candidates.append(filename.replace('-macos-', '-', 1))
+        else:
+            for arch in ('x86_64', 'aarch64'):
+                suffix = f'-{arch}.dmg'
+                if filename.endswith(suffix):
+                    candidates.append(filename[:-len(suffix)] + f'-macos-{arch}.dmg')
+                    break
+    return candidates
+
 
 def generator_view(request):
     if request.method == 'POST':
@@ -276,24 +411,28 @@ def generator_view(request):
                 "filename":filename
             }
 
-            temp_json_path = f"data_{uuid.uuid4()}.json"
-            zip_filename = f"secrets_{uuid.uuid4()}.zip"
-            zip_path = "temp_zips/%s" % (zip_filename)
-            Path("temp_zips").mkdir(parents=True, exist_ok=True)
-
-            with open(temp_json_path, "w") as f:
-                json.dump(inputs_raw, f)
-
-            with pyzipper.AESZipFile(zip_path, 'w', compression=pyzipper.ZIP_LZMA, encryption=pyzipper.WZ_AES) as zf:
+            zip_buffer = io.BytesIO()
+            with pyzipper.AESZipFile(
+                zip_buffer,
+                'w',
+                compression=pyzipper.ZIP_LZMA,
+                encryption=pyzipper.WZ_AES,
+            ) as zf:
                 zf.setpassword(_settings.ZIP_PASSWORD.encode())
-                zf.write(temp_json_path, arcname="secrets.json")
+                zf.writestr("secrets.json", json.dumps(inputs_raw))
 
-            if os.path.exists(temp_json_path):
-                os.remove(temp_json_path)
+            try:
+                _upload_jfrog_bytes(
+                    myuuid,
+                    "secrets.zip",
+                    zip_buffer.getvalue(),
+                    content_type='application/zip',
+                )
+            except requests.RequestException as exc:
+                return JsonResponse({"error": f"Failed to upload secrets zip: {str(exc)}"}, status=500)
 
             zipJson = {}
-            zipJson['url'] = full_url
-            zipJson['file'] = zip_filename
+            zipJson['url'] = _jfrog_temp_resource_url(myuuid, "secrets.zip")
 
             zip_url = json.dumps(zipJson)
 
@@ -318,6 +457,7 @@ def generator_view(request):
             )
             try:
                 response = requests.post(url, json=data, headers=headers)
+                print(response)
                 #print(response)
                 if response.status_code == 204 or response.status_code == 200:
                     github_data = response.json()
@@ -395,28 +535,29 @@ def check_for_file(request):
 def download(request):
     filename = request.GET['filename']
     uuid = request.GET['uuid']
-    #filename = filename+".exe"
-    file_path = os.path.join('exe',uuid,filename)
-    with open(file_path, 'rb') as file:
-        response = HttpResponse(file, headers={
-            'Content-Type': 'application/vnd.microsoft.portable-executable',
-            'Content-Disposition': f'attachment; filename="{filename}"'
-        })
 
-    return response
+    for candidate in _artifact_candidate_filenames(filename):
+        try:
+            content, content_type = _download_jfrog_artifact_file(uuid, candidate)
+            return _build_download_response(content, filename, content_type)
+        except Http404:
+            continue
+        except requests.RequestException:
+            break
+
+    for candidate in _artifact_candidate_filenames(filename):
+        file_path = os.path.join('exe', uuid, candidate)
+        if os.path.exists(file_path):
+            with open(file_path, 'rb') as file:
+                return _build_download_response(file.read(), filename)
+
+    raise Http404("File not found")
 
 def get_png(request):
     filename = request.GET['filename']
     uuid = request.GET['uuid']
-    #filename = filename+".exe"
-    file_path = os.path.join('png',uuid,filename)
-    with open(file_path, 'rb') as file:
-        response = HttpResponse(file, headers={
-            'Content-Type': 'application/vnd.microsoft.portable-executable',
-            'Content-Disposition': f'attachment; filename="{filename}"'
-        })
-
-    return response
+    content, content_type = _download_jfrog_file(uuid, filename)
+    return _build_download_response(content, filename, content_type)
 
 def create_github_run(myuuid):
     new_github_run = GithubRun(
@@ -503,9 +644,6 @@ def startgh(request):
     return HttpResponse(status=204)
 
 def save_png(file, uuid, domain, name):
-    file_save_path = "png/%s/%s" % (uuid, name)
-    Path("png/%s" % uuid).mkdir(parents=True, exist_ok=True)
-
     if isinstance(file, str):  # Check if it's a base64 string
         try:
             header, encoded = file.split(';base64,')
@@ -517,59 +655,49 @@ def save_png(file, uuid, domain, name):
         except Exception as e:  # Catch general exceptions during decoding
             print(f"Error decoding base64: {e}")
             return None
-        
-    with open(file_save_path, "wb+") as f:
-        for chunk in file.chunks():
-            f.write(chunk)
-    # imageJson = {}
-    # imageJson['url'] = domain
-    # imageJson['uuid'] = uuid
-    # imageJson['file'] = name
-    #return "%s/%s" % (domain, file_save_path)
+
+    image_bytes = b''.join(chunk for chunk in file.chunks())
+    _upload_jfrog_bytes(uuid, name, image_bytes, content_type='image/png')
     return domain, uuid, name
 
 def save_custom_client(request):
     file = request.FILES['file']
     myuuid = request.POST.get('uuid')
-    file_save_path = "exe/%s/%s" % (myuuid, file.name)
-    Path("exe/%s" % myuuid).mkdir(parents=True, exist_ok=True)
-    with open(file_save_path, "wb+") as f:
-        for chunk in file.chunks():
-            f.write(chunk)
+    if not myuuid:
+        return HttpResponse("Missing UUID", status=400)
+
+    file_bytes = b''.join(chunk for chunk in file.chunks())
+    try:
+        _upload_jfrog_artifact_bytes(
+            myuuid,
+            file.name,
+            file_bytes,
+            content_type=file.content_type or mimetypes.guess_type(file.name)[0] or 'application/octet-stream',
+        )
+    except requests.RequestException as exc:
+        return HttpResponse(f"Upload failed: {str(exc)}", status=502)
 
     return HttpResponse("File saved successfully!")
 
 def cleanup_secrets(request):
-    # Pass the UUID as a query param or in JSON body
     data = json.loads(request.body)
     my_uuid = data.get('uuid')
     
     if not my_uuid:
         return HttpResponse("Missing UUID", status=400)
 
-    # 1. Find the files in your temp directory matching the UUID
-    temp_dir = os.path.join('temp_zips')
-    
-    # We look for any file starting with 'secrets_' and containing the uuid
-    for filename in os.listdir(temp_dir):
-        if my_uuid in filename and filename.endswith('.zip'):
-            file_path = os.path.join(temp_dir, filename)
-            try:
-                os.remove(file_path)
-                print(f"Successfully deleted {file_path}")
-            except OSError as e:
-                print(f"Error deleting file: {e}")
+    try:
+        _delete_jfrog_temp_resources(my_uuid)
+    except requests.RequestException as exc:
+        return HttpResponse(f"Cleanup failed: {str(exc)}", status=502)
 
     return HttpResponse("Cleanup successful", status=200)
 
 def get_zip(request):
     filename = request.GET['filename']
-    #filename = filename+".exe"
-    file_path = os.path.join('temp_zips',filename)
-    with open(file_path, 'rb') as file:
-        response = HttpResponse(file, headers={
-            'Content-Type': 'application/vnd.microsoft.portable-executable',
-            'Content-Disposition': f'attachment; filename="{filename}"'
-        })
+    uuid = request.GET.get('uuid')
+    if not uuid:
+        return HttpResponse("Missing UUID", status=400)
 
-    return response
+    content, content_type = _download_jfrog_file(uuid, filename)
+    return _build_download_response(content, filename, content_type)

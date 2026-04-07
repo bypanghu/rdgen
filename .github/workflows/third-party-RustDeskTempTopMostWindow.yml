@@ -29,6 +29,7 @@ on:
 
 env:
   project_path: WindowInjection/WindowInjection.vcxproj
+  PATCH_BASE_URL: "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/.github/patches"
 
 jobs:
   build-RustDeskTempTopMostWindow:
@@ -53,16 +54,6 @@ jobs:
         with:
           zip_password: ${{ secrets.ZIP_PASSWORD }}
 
-      - name: Finalize and Cleanup zip/json
-        if: always() # Run even if previous steps fail
-        continue-on-error: true
-        uses: fjogeleit/http-request-action@v1
-        with:
-          url: "${{ secrets.GENURL }}/cleanzip"
-          method: 'POST'
-          customHeaders: '{"Content-Type": "application/json"}'
-          data: '{"uuid": "${{ env.uuid }}"}'
-
       - name: Download the source code
         run: |
           git clone https://github.com/rustdesk-org/RustDeskTempTopMostWindow RustDeskTempTopMostWindow
@@ -77,8 +68,8 @@ jobs:
           command: |
             cd RustDeskTempTopMostWindow && git checkout 53b548a5398624f7149a382000397993542ad796
             if ($env:privacylink_url-ne "false") {
-              Invoke-WebRequest -Uri ${{ env.privacylink_url }}/get_png?filename=${{ env.privacylink_file }}"&"uuid=${{ env.privacylink_uuid }} -OutFile privacy.png
-              Invoke-WebRequest -Uri https://raw.githubusercontent.com/bryangerlach/rdgen/refs/heads/master/.github/patches/privacyScreen.py -OutFile privacyScreen.py
+              Invoke-WebRequest -Uri "${{ env.privacylink_url }}/get_png?filename=${{ env.privacylink_file }}&uuid=${{ env.privacylink_uuid }}" -OutFile privacy.png
+              Invoke-WebRequest -Uri "${{ env.PATCH_BASE_URL }}/privacyScreen.py" -OutFile privacyScreen.py
               python privacyScreen.py
               rm ./WindowInjection/img.cpp
               mv img.cpp ./WindowInjection/img.cpp

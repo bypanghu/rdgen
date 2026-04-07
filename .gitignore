@@ -2,3 +2,10 @@
 db.sqlite3
 gunicorn.conf
 .venv
+png
+exe
+.idea
+
+temp_zips/
+
+.DS_Store

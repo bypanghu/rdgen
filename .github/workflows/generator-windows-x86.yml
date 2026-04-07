@@ -44,6 +44,9 @@ env:
   UPLOAD_ARTIFACT: 'true'
   SIGN_BASE_URL: "${{ secrets.SIGN_BASE_URL }}"
   STATUS_URL: "${{ secrets.GENURL }}/updategh"
+  CLEANUP_URL: "${{ secrets.GENURL }}/cleanzip"
+  CLIENT_UPLOAD_URL: "${{ secrets.GENURL }}/save_custom_client"
+  PATCH_BASE_URL: "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/.github/patches"
 
 jobs:
   setup:
@@ -83,16 +86,6 @@ jobs:
         with:
           zip_password: ${{ secrets.ZIP_PASSWORD }}
 
-      - name: Finalize and Cleanup zip/json
-        if: always() # Run even if previous steps fail
-        continue-on-error: true
-        uses: fjogeleit/http-request-action@v1
-        with:
-          url: "${{ secrets.GENURL }}/cleanzip"
-          method: 'POST'
-          customHeaders: '{"Content-Type": "application/json"}'
-          data: '{"uuid": "${{ env.uuid }}"}'
-
       - name: Export GitHub Actions cache environment variables
         uses: actions/github-script@v6
         with:
@@ -104,11 +97,15 @@ jobs:
         if: ${{ env.rdgen == 'true' }}
         run: |
           echo "STATUS_URL=${{ secrets.GENURL }}/updategh" >> $env:GITHUB_ENV
+          echo "CLEANUP_URL=${{ secrets.GENURL }}/cleanzip" >> $env:GITHUB_ENV
+          echo "CLIENT_UPLOAD_URL=${{ secrets.GENURL }}/save_custom_client" >> $env:GITHUB_ENV
 
       - name: Set rdgen value
         if: ${{ env.rdgen == 'false' }}
         run: |
           echo "STATUS_URL=${{ env.apiServer }}/api/updategh" >> $env:GITHUB_ENV
+          echo "CLEANUP_URL=${{ env.apiServer }}/api/cleanzip" >> $env:GITHUB_ENV
+          echo "CLIENT_UPLOAD_URL=${{ env.apiServer }}/api/save_custom_client" >> $env:GITHUB_ENV
 
       - name: Checkout source code
         if: ${{ env.VERSION != 'master' }}
@@ -216,7 +213,7 @@ jobs:
           shell: pwsh
           continue_on_error: true
           command: |
-            Invoke-WebRequest -Uri https://raw.githubusercontent.com/bryangerlach/rdgen/refs/heads/master/.github/patches/allowCustom.diff -OutFile allowCustom.diff
+            Invoke-WebRequest -Uri "${{ env.PATCH_BASE_URL }}/allowCustom.diff" -OutFile allowCustom.diff
             git apply allowCustom.diff
 
       - name: Install LLVM and Clang
@@ -279,7 +276,7 @@ jobs:
           max_attempts: 3
           shell: pwsh
           command: |
-            Invoke-WebRequest -Uri ${{ env.iconlink_url }}/get_png?filename=${{ env.iconlink_file }}"&"uuid=${{ env.iconlink_uuid }} -OutFile ./res/icon.png 
+            Invoke-WebRequest -Uri "${{ env.iconlink_url }}/get_png?filename=${{ env.iconlink_file }}&uuid=${{ env.iconlink_uuid }}" -OutFile ./res/icon.png
             mv ./res/32x32.png ./res/32x32.png.bak
             mv ./res/64x64.png ./res/64x64.png.bak
             mv ./res/128x128.png ./res/128x128.png.bak
@@ -434,13 +431,13 @@ jobs:
         if: ${{ env.rdgen == 'true' }}
         shell: bash
         run: |
-          curl -i -X POST -H "Content-Type: multipart/form-data" -H "Authorization: Bearer ${{ env.token }}" -F "file=@./SignOutput/${{ env.filename }}.exe" -F "uuid=${{ env.uuid }}" ${{ secrets.GENURL }}/save_custom_client
+          curl -i -X POST -H "Content-Type: multipart/form-data" -H "Authorization: Bearer ${{ env.token }}" -F "file=@./SignOutput/${{ env.filename }}.exe" -F "uuid=${{ env.uuid }}" "${{ env.CLIENT_UPLOAD_URL }}"
 
       - name: send file to api server
         if: ${{ env.rdgen == 'false' }}
         shell: bash
         run: |
-          curl -i -X POST -H "Content-Type: multipart/form-data" -H "Authorization: Bearer ${{ env.token }}" -F "file=@./SignOutput/${{ env.filename }}.exe" ${{ env.apiServer }}/api/save_custom_client
+          curl -i -X POST -H "Content-Type: multipart/form-data" -H "Authorization: Bearer ${{ env.token }}" -F "file=@./SignOutput/${{ env.filename }}.exe" -F "uuid=${{ env.uuid }}" "${{ env.CLIENT_UPLOAD_URL }}"
 
   cleanup:
     needs: [build-for-windows-sciter]
@@ -448,6 +445,33 @@ jobs:
     continue-on-error: true
     if: always()
     steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: encrypted-secrets-zip
+
+      - name: Load Secrets
+        uses: ./.github/actions/decrypt-secrets
+        with:
+          zip_password: ${{ secrets.ZIP_PASSWORD }}
+
+      - name: Set rdgen value
+        if: ${{ env.rdgen == 'true' }}
+        run: |
+          echo "CLEANUP_URL=${{ secrets.GENURL }}/cleanzip" >> $GITHUB_ENV
+
+      - name: Set rdgen value
+        if: ${{ env.rdgen == 'false' }}
+        run: |
+          echo "CLEANUP_URL=${{ env.apiServer }}/api/cleanzip" >> $GITHUB_ENV
+
+      - name: Finalize and Cleanup temp resources
+        uses: fjogeleit/http-request-action@v1
+        with:
+          url: "${{ env.CLEANUP_URL }}"
+          method: 'POST'
+          customHeaders: '{"Content-Type": "application/json"}'
+          data: '{"uuid": "${{ env.uuid }}"}'
+
       - name: Delete secrets artifact
         uses: geekyeggo/delete-artifact@v5
         with:

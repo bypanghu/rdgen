@@ -149,8 +149,7 @@
                 <a href='/download?filename={{filename}}-x86_64.apk&uuid={{uuid}}' class="download-link">Download {{filename}}-x86_64.apk</a>
                 <a href='/download?filename={{filename}}-armv7.apk&uuid={{uuid}}' class="download-link">Download {{filename}}-armv7.apk</a>
             {% elif platform == 'macos' %}
-                <a href='/download?filename={{filename}}-x86_64.dmg&uuid={{uuid}}' class="download-link">Download {{filename}}-x86_64.dmg</a>
-                <a href='/download?filename={{filename}}-aarch64.dmg&uuid={{uuid}}' class="download-link">Download {{filename}}-aarch64.dmg</a>
+                <a href='/download?filename={{filename}}-macos-aarch64.dmg&uuid={{uuid}}' class="download-link">Download {{filename}}-macos-aarch64.dmg</a>
             {% else %}
                 <p>Error: No file generated</p>
             {% endif %}
